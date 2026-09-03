@@ -1,0 +1,198 @@
+# =============================================================================
+# 0. PACOTES E CONFIGURAÇÃO GERAL
+# =============================================================================
+library(hydroDataBR)
+library(writexl)
+library(ggplot2)
+library(zoo)
+library(dplyr)
+
+# =============================================================================
+# =============================================================================
+
+pasta_saida <- "C:/Users/gabriel.paula/Desktop/Projetos/36_Analise_Frequencia_Joao"
+dir.create(pasta_saida, showWarnings = FALSE, recursive = TRUE)
+
+estacoes         <- c("1943008")  # código(s) da(s) estação(ões) pluviométrica(s)
+ano_inicio_hidro <- 10            # ano hidrológico BR: out/(ano-1) a set/ano
+
+# =============================================================================
+# 1. DOWNLOAD DOS DADOS BRUTOS (ANA / HidroWeb)
+# =============================================================================
+data <- get_ana_data(
+  product      = "daily_rainfall",
+  data_source  = "api",
+  station_code = estacoes,
+  start_date   = "1800-01-01",
+  end_date     = Sys.Date()
+)
+str(data)
+
+# =============================================================================
+# 1b. VISUALIZAÇÃO INTERATIVA DA SÉRIE BRUTA (PLOTLY)
+# =============================================================================
+library(plotly)
+
+p_serie_interativa <- plot_ly(
+  data,
+  x = ~date,
+  y = ~value,
+  type = "scatter",
+  mode = "lines",
+  line = list(width = 1)
+) %>%
+  layout(
+    title  = paste("Precipitação diária - estação", paste(unique(data$station_code), collapse = ", ")),
+    xaxis  = list(title = "Data", rangeslider = list(visible = TRUE)),
+    yaxis  = list(title = "Chuva (mm)")
+  )
+
+p_serie_interativa
+
+# =============================================================================
+# 2. EXPORTAR OS DADOS BRUTOS PARA EXCEL
+# =============================================================================
+data2 <- data
+data2$station_code      <- as.numeric(data2$station_code)
+data2$consistency_level <- as.numeric(data2$consistency_level)
+data2$source_status     <- as.numeric(data2$source_status)  # atenção: costuma virar NA
+
+estacao_label <- paste(unique(data2$station_code), collapse = "_")
+write_xlsx(data2, file.path(pasta_saida, paste0("dados_brutos_", estacao_label, ".xlsx")))
+
+# =============================================================================
+# 3. VISÃO GERAL: DISPONIBILIDADE (BRUTO+CONSISTIDO) E CLIMATOLOGIA MENSAL
+# =============================================================================
+p_disponibilidade_bruta <- plot_hydro_data(data, plot = "daily_availability", variable = "rainfall")
+p_disponibilidade_bruta
+
+p_climatologia <- plot_hydro_data(
+  data, plot = "monthly_summary", variable = "rainfall", value_col = "mean_total_value"
+)
+p_climatologia
+
+tabela_regime <- table_hydro_data(
+  data, table = "daily_statistics", period = "monthly_regime", variable = "rainfall"
+)
+tabela_regime
+
+# =============================================================================
+# 4. MANTER SOMENTE DADOS CONSISTIDOS (consistency_level == "2")
+# =============================================================================
+data_consistido <- data
+data_consistido$value[!(data_consistido$consistency_level %in% "2")] <- NA
+
+p_disponibilidade_consistida <- plot_hydro_data(
+  data_consistido, plot = "daily_availability", variable = "rainfall"
+)
+p_disponibilidade_consistida
+
+# =============================================================================
+# 5. DISPONIBILIDADE ANUAL (SÓ DADO CONSISTIDO) - PARA ANÁLISE MANUAL
+# =============================================================================
+# Sem corte automático aqui. Essa tabela (junto com as flags da seção 7) é o
+# insumo que você vai olhar pra decidir manualmente quais anos excluir antes
+# de rodar a análise de frequência no ALEA.
+disponibilidade_anual <- table_hydro_data(
+  data_consistido, table = "daily_availability", period = "annual", variable = "rainfall"
+)
+disponibilidade_anual
+
+# =============================================================================
+# 6. DIAGNÓSTICOS COMPLEMENTARES (exploratórios)
+# =============================================================================
+disponibilidade_mensal <- table_hydro_data(
+  data, table = "daily_availability", period = "monthly", variable = "rainfall"
+)
+
+lacunas_mensais <- analyze_hydro_data(
+  data, analysis = "daily_gap_summary", period = "monthly", variable = "rainfall"
+)
+
+diagnosticos_chuva <- analyze_hydro_data(data, analysis = "rainfall_diagnostics", variable = "rainfall")
+
+# =============================================================================
+# 7. VALORES ACUMULADOS (ROLLING SUM) - 2, 3, 5, 7, 10, 15, 20, 30 DIAS
+# =============================================================================
+
+janelas <- c(2, 3, 5, 7, 10, 15, 20, 30)
+
+data_acumulados <- data_consistido %>%
+  group_by(station_code) %>%
+  arrange(date, .by_group = TRUE) %>%
+  mutate(
+    across(
+      .cols = "value",
+      .fns  = setNames(
+        lapply(janelas, function(n) {
+          function(x) rollapplyr(x, width = n, FUN = sum, na.rm = TRUE, fill = NA)
+        }),
+        paste0("acum_", janelas, "d")
+      )
+    )
+  ) %>%
+  ungroup()
+
+head(data_acumulados)
+
+# =============================================================================
+# 7b. MÁXIMOS NO PERÍODO DE ESTIAGEM (abr-set)
+# =============================================================================
+
+library(dplyr)
+
+mes_inicio_estiagem <- 4  # abril
+mes_fim_estiagem    <- 9  # setembro
+
+maximos_estiagem <- data_acumulados %>%
+  filter(as.character(variable) == "rainfall") %>%
+  mutate(mes = as.integer(format(date, "%m")),
+         ano = as.integer(format(date, "%Y"))) %>%
+  filter(mes >= mes_inicio_estiagem & mes <= mes_fim_estiagem) %>%
+  group_by(station_code, ano) %>%
+  summarise(
+    season_start_date = as.Date(sprintf("%04d-%02d-01", ano[1], mes_inicio_estiagem)),
+    season_end_date   = as.Date(sprintf("%04d-%02d-01", ano[1], mes_fim_estiagem + 1)) - 1,
+    max_1d   = max(value,             na.rm = TRUE),
+    max_2d   = max(value_acum_2d,     na.rm = TRUE),
+    max_3d   = max(value_acum_3d,     na.rm = TRUE),
+    max_5d   = max(value_acum_5d,     na.rm = TRUE),
+    max_7d   = max(value_acum_7d,     na.rm = TRUE),
+    max_10d  = max(value_acum_10d,    na.rm = TRUE),
+    max_15d  = max(value_acum_15d,    na.rm = TRUE),
+    max_20d  = max(value_acum_20d,    na.rm = TRUE),
+    max_30d  = max(value_acum_30d,    na.rm = TRUE),
+    .groups = "drop"
+  )
+
+maximos_estiagem
+
+# =============================================================================
+# 8. EXPORTAR GRÁFICOS E TABELA FINAL
+# =============================================================================
+salvar_grafico <- function(plot_obj, nome_arquivo, largura = 10, altura = 6) {
+  ggsave(
+    filename = file.path(pasta_saida, nome_arquivo),
+    plot     = plot_obj,
+    width    = largura,
+    height   = altura,
+    dpi      = 300
+  )
+}
+
+salvar_grafico(p_disponibilidade_bruta,      paste0("disponibilidade_bruta_", estacao_label, ".png"))
+salvar_grafico(p_disponibilidade_consistida, paste0("disponibilidade_consistida_", estacao_label, ".png"))
+salvar_grafico(p_climatologia,               paste0("climatologia_mensal_", estacao_label, ".png"), altura = 5)
+
+# Série diária com todos os acumulados (2, 3, 5, 7, 10, 15, 20, 30 dias)
+write_xlsx(
+  data_acumulados,
+  file.path(pasta_saida, paste0("data_acumulados_", estacao_label, ".xlsx"))
+)
+
+# Máximos de estiagem (abr-set) por duração (1, 2, 3...30 dias),
+# que é a série que vai alimentar a análise de frequência
+write_xlsx(
+  maximos_estiagem,
+  file.path(pasta_saida, paste0("maximos_estiagem_", estacao_label, ".xlsx"))
+)
