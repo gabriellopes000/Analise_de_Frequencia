@@ -6,15 +6,16 @@ library(writexl)
 library(ggplot2)
 library(zoo)
 library(dplyr)
+library(htmlwidgets)
 
 # =============================================================================
 # =============================================================================
 
 pasta_saida <- "C:/Users/gabriel.paula/Desktop/Projetos/36_Analise_Frequencia_Joao"
 dir.create(pasta_saida, showWarnings = FALSE, recursive = TRUE)
-
 estacoes         <- c("1943008")  # código(s) da(s) estação(ões) pluviométrica(s)
 ano_inicio_hidro <- 10            # ano hidrológico BR: out/(ano-1) a set/ano
+estacao_label    <- paste(estacoes, collapse = "_")
 
 # =============================================================================
 # 1. DOWNLOAD DOS DADOS BRUTOS (ANA / HidroWeb)
@@ -48,6 +49,16 @@ p_serie_interativa <- plot_ly(
   )
 
 p_serie_interativa
+
+# =============================================================================
+# 1c. EXPORTAR SÉRIE INTERATIVA EM HTML
+# =============================================================================
+
+saveWidget(
+  p_serie_interativa,
+  file          = file.path(pasta_saida, paste0("serie_interativa_", estacao_label, ".html")),
+  selfcontained = TRUE
+)
 
 # =============================================================================
 # 2. EXPORTAR OS DADOS BRUTOS PARA EXCEL
