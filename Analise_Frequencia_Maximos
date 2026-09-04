@@ -61,6 +61,28 @@ verificar_instalar_pacotes(
 excel_sheets(caminho)
 dados <- read_excel(caminho, sheet = 1)
 
+colunas_necessarias <- c(
+  "station_code", "ano",
+  "max_1d", "max_2d", "max_3d", "max_5d", "max_7d",
+  "max_10d", "max_15d", "max_20d", "max_30d"
+)
+
+verificar_colunas_dados <- function(dados, colunas_necessarias) {
+  colunas_faltantes <- setdiff(colunas_necessarias, names(dados))
+  
+  if (length(colunas_faltantes) > 0) {
+    stop(
+      "A planilha de entrada esta incompleta. Colunas faltantes: ",
+      paste(colunas_faltantes, collapse = ", "),
+      call. = FALSE
+    )
+  }
+  
+  message("Todas as colunas necessarias estao presentes. Prosseguindo com a analise.")
+}
+
+verificar_colunas_dados(dados, colunas_necessarias)
+
 # =============================================================================
 # 3. FATOR DE WEISS (MORBIDELLI ET.AL, 2017)
 # =============================================================================
