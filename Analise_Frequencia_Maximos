@@ -1,0 +1,1147 @@
+# =============================================================================
+# 1. INFORMAÇÕES DE ENTRADA
+# =============================================================================
+
+caminho <- "C:/Users/gabriel.paula/Desktop/Projetos/36_Analise_Frequencia_Joao/02_Analise_de_Frequencia/maximos_estiagem_1943008.xlsx"
+
+caminho_salvamento <- "C:/Users/gabriel.paula/Desktop/Projetos/36_Analise_Frequencia_Joao/02_Analise_de_Frequencia"
+
+distribuicao_escolhida <- "ln2"
+
+metodo_escolhido <- "lmom"
+
+retornos <- c(1.01, 2, 5, 10, 25, 50, 100, 200, 1000, 10000)
+
+# =============================================================================
+# 2. PACOTES E CONFIGURAÇÃO GERAL
+# =============================================================================
+
+verificar_instalar_pacotes <- function(pacotes_cran = character(),
+                                       pacotes_github = list()) {
+  # pacotes_github: lista nomeada, ex. list(ALEA = "hydrostat/ALEA")
+  
+  # --- Pacotes do CRAN ---
+  for (pacote in pacotes_cran) {
+    if (!requireNamespace(pacote, quietly = TRUE)) {
+      message("Instalando pacote (CRAN): ", pacote)
+      install.packages(pacote)
+    }
+    library(pacote, character.only = TRUE)
+  }
+  
+  # --- Pacotes do GitHub ---
+  if (length(pacotes_github) > 0 && !requireNamespace("remotes", quietly = TRUE)) {
+    install.packages("remotes")
+  }
+  
+  for (nome in names(pacotes_github)) {
+    if (!requireNamespace(nome, quietly = TRUE)) {
+      message("Instalando pacote (GitHub): ", nome, " <- ", pacotes_github[[nome]])
+      remotes::install_github(pacotes_github[[nome]])
+    }
+    library(nome, character.only = TRUE)
+  }
+  
+  invisible(TRUE)
+}
+
+verificar_instalar_pacotes(
+  pacotes_cran = c(
+    "readxl", "dplyr", "purrr", "ggplot2",
+    "patchwork", "tidyr", "plotly", "htmltools", "openxlsx"
+  ),
+  pacotes_github = list(
+    ALEA = "hydrostat/ALEA"  # confirme se esse é o repositório correto
+  )
+)
+
+# =============================================================================
+# lista as abas disponíveis, caso tenha mais de uma
+
+excel_sheets(caminho)
+dados <- read_excel(caminho, sheet = 1)
+
+# =============================================================================
+# 3. FATOR DE WEISS (MORBIDELLI ET.AL, 2017)
+# =============================================================================
+
+calcula_fator_morbidelli <- function(ta, d) {
+  # ta: resolução temporal da medição (mesma unidade de d)
+  # d : duração de interesse (mesma unidade de ta)
+  razao  <- ta / d
+  Ea_pct <- 5.2 * razao^2 + 5.57 * razao
+  fator  <- 1 / (1 - Ea_pct / 100)
+  return(list(razao = razao, Ea_pct = Ea_pct, fator = fator))
+}
+
+# Durações presentes no data.frame, em dias (ta = 1 dia, leitura fixa de 24h)
+duracoes_dias <- c(
+  max_1d  = 1,
+  max_2d  = 2,
+  max_3d  = 3,
+  max_5d  = 5,
+  max_7d  = 7,
+  max_10d = 10,
+  max_15d = 15,
+  max_20d = 20,
+  max_30d = 30
+)
+
+fatores <- calcula_fator_morbidelli(ta = 1, d = duracoes_dias)$fator
+names(fatores) <- names(duracoes_dias)
+
+# Conferir os multiplicadores usados
+data.frame(
+  duracao_dias = duracoes_dias,
+  fator        = round(fatores, 4)
+)
+
+dados_corrigido <- dados
+
+for (col in names(duracoes_dias)) {
+  dados_corrigido[[col]] <- dados_corrigido[[col]] * fatores[[col]]
+}
+
+# =============================================================================
+# 4. PLOTAGEM
+# =============================================================================
+
+plot_max_duracao <- function(dados, coluna, duracao_label, estacao = NULL) {
+  ggplot(dados, aes(x = ano, y = .data[[coluna]])) +
+    geom_col(
+      fill = "#1B4F72",
+      alpha = 0.9,
+      width = 0.7
+    ) +
+    scale_x_continuous(breaks = dados$ano) +
+    labs(
+      title = duracao_label,   # título curto, igual fizemos no plot de quantis
+      x = "Ano hidrológico",
+      y = "Precipitação máxima anual (mm)"
+    ) +
+    theme_bw(base_size = 11) +
+    theme(
+      axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+      panel.grid.minor = element_blank()
+    )
+}
+
+# Durações e rótulos correspondentes
+duracoes_label <- c(
+  max_1d  = "1 dia",
+  max_2d  = "2 dias",
+  max_3d  = "3 dias",
+  max_5d  = "5 dias",
+  max_7d  = "7 dias",
+  max_10d = "10 dias",
+  max_15d = "15 dias",
+  max_20d = "20 dias",
+  max_30d = "30 dias"
+)
+
+estacao_id <- unique(dados$station_code)
+
+# Lista de gráficos ggplot para o df corrigido
+plots_dados_corrigido <- lapply(names(duracoes_label), function(col) {
+  plot_max_duracao(dados_corrigido, col, duracoes_label[[col]], estacao_id)
+})
+names(plots_dados_corrigido) <- names(duracoes_label)
+
+# Convertendo para plotly interativo
+plots_dados_corrigido_interativos <- lapply(plots_dados_corrigido, function(p) {
+  ggplotly(p, tooltip = c("x", "y"), height = 500)
+})
+names(plots_dados_corrigido_interativos) <- names(plots_dados_corrigido)
+
+# Montando a página: um título (h2) + o gráfico, um bloco embaixo do outro
+pagina_html_maximas <- tagList(
+  h1(
+    paste0("Precipitações Máximas Anuais | Estação ", estacao_id),
+    style = "text-align:center; font-family:sans-serif;"
+  ),
+  lapply(names(plots_dados_corrigido_interativos), function(dur) {
+    tagList(
+      h2(duracoes_label[[dur]], style = "text-align:center; font-family:sans-serif; margin-top:40px;"),
+      plots_dados_corrigido_interativos[[dur]],
+      hr(style = "margin:30px 0;")
+    )
+  })
+)
+
+save_html(
+  pagina_html_maximas,
+  file = file.path(caminho_salvamento, "maximas_anuais_todas_duracoes.html")
+)
+
+browseURL(file.path(caminho_salvamento, "maximas_anuais_todas_duracoes.html"))
+
+dados_longo <- dados %>%
+  select(ano, all_of(names(duracoes_label))) %>%
+  pivot_longer(
+    cols = all_of(names(duracoes_label)),
+    names_to = "duracao",
+    values_to = "precipitacao"
+  ) %>%
+  mutate(duracao_label = factor(duracoes_label[duracao], levels = duracoes_label))
+
+p_maximas_todas_duracoes <- ggplot(
+  dados_longo,
+  aes(x = ano, y = precipitacao, color = duracao_label, group = duracao_label)
+) +
+  geom_line(linewidth = 0.6) +
+  geom_point(size = 1.5) +
+  scale_x_continuous(breaks = unique(dados_longo$ano)) +
+  scale_color_viridis_d(name = "Duração") +
+  labs(
+    title = "Precipitações Máximas Anuais",
+    subtitle = paste0("Estação ", estacao_id),
+    x = "Ano hidrológico",
+    y = "Precipitação máxima anual (mm)"
+  ) +
+  theme_bw(base_size = 11) +
+  theme(
+    axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+    panel.grid.minor = element_blank()
+  )
+
+p_maximas_todas_duracoes
+
+ggsave(
+  filename = file.path(caminho_salvamento, "maximas_anuais_todas_duracoes.png"),
+  plot = p_maximas_todas_duracoes,
+  width = 10,
+  height = 6,
+  dpi = 300
+)
+
+ordem_duracoes <- names(duracoes_label)  # já na ordem certa: 1d, 2d, 3d, 5d, 7d, 10d, 15d, 20d, 30d
+
+verificar_consistencia_duracoes <- function(dados, ordem_duracoes) {
+  inconsistencias <- list()
+  
+  for (i in seq_len(nrow(dados))) {
+    valores <- as.numeric(dados[i, ordem_duracoes])
+    
+    for (j in 2:length(valores)) {
+      if (valores[j] < valores[j - 1]) {
+        inconsistencias[[length(inconsistencias) + 1]] <- data.frame(
+          ano          = dados$ano[i],
+          duracao_menor = ordem_duracoes[j - 1],
+          duracao_maior = ordem_duracoes[j],
+          valor_menor   = valores[j - 1],
+          valor_maior   = valores[j]
+        )
+      }
+    }
+  }
+  
+  if (length(inconsistencias) > 0) do.call(rbind, inconsistencias) else NULL
+}
+
+inconsistencias_duracoes <- verificar_consistencia_duracoes(dados, ordem_duracoes)
+
+if (!is.null(inconsistencias_duracoes)) {
+  message(
+    "⚠ ", nrow(inconsistencias_duracoes), " inconsistência(s) encontrada(s) — duração maior com máximo menor que a duração inferior:\n",
+    paste0(
+      "  - Ano ", inconsistencias_duracoes$ano, ": ", inconsistencias_duracoes$duracao_menor,
+      " (", round(inconsistencias_duracoes$valor_menor, 1), " mm) > ",
+      inconsistencias_duracoes$duracao_maior, " (", round(inconsistencias_duracoes$valor_maior, 1), " mm)",
+      collapse = "\n"
+    )
+  )
+} else {
+  message("✓ Nenhuma inconsistência: todas as durações são monotonicamente crescentes (ou iguais) em todos os anos.")
+}
+
+# =============================================================================
+# 4. VETORES
+# =============================================================================
+
+duracoes_label <- c(
+  max_1d  = "1 dia",
+  max_2d  = "2 dias",
+  max_3d  = "3 dias",
+  max_5d  = "5 dias",
+  max_7d  = "7 dias",
+  max_10d = "10 dias",
+  max_15d = "15 dias",
+  max_20d = "20 dias",
+  max_30d = "30 dias"
+)
+
+# Lista de vetores numéricos, um por duração, a partir do df corrigido
+vetores_max <- lapply(names(duracoes_label), function(col) {
+  dados_corrigido[[col]]
+})
+names(vetores_max) <- names(duracoes_label)
+
+# =============================================================================
+# 4. DIAGNOSTICOS AMOSTRAS
+# =============================================================================
+
+# Diagnósticos completos para cada duração (dados_corrigido)
+diagnosticos_max <- lapply(vetores_max, function(x) {
+  alea_diagnostics(x, diagnostics = "all")
+})
+names(diagnosticos_max) <- names(vetores_max)
+
+# Conferindo o resultado de uma duração específica
+diagnosticos_max$max_1d
+
+# Juntando tudo em uma única tabela, com a duração identificada
+diagnosticos_df <- do.call(rbind, lapply(names(diagnosticos_max), function(dur) {
+  d <- as.data.frame(diagnosticos_max[[dur]])
+  d$duracao <- dur
+  d
+}))
+
+diagnosticos_df[!is.na(diagnosticos_df$p_value), ]
+
+diagnosticos_df_export <- diagnosticos_df %>%
+  select(-distribution, -method) %>%
+  relocate(duracao, .before = everything())
+
+wb <- createWorkbook()
+addWorksheet(wb, "Diagnósticos")
+
+writeData(wb, "Diagnósticos", diagnosticos_df_export, headerStyle = createStyle(
+  textDecoration = "bold",
+  fgFill = "#1B4F72",
+  fontColour = "white",
+  halign = "center",
+  border = "TopBottom"
+))
+
+# Largura automática das colunas
+setColWidths(wb, "Diagnósticos", cols = 1:ncol(diagnosticos_df_export), widths = "auto")
+
+# Congela o cabeçalho e a primeira coluna (duração)
+freezePane(wb, "Diagnósticos", firstRow = TRUE, firstCol = TRUE)
+
+# Filtro automático no cabeçalho
+addFilter(wb, "Diagnósticos", rows = 1, cols = 1:ncol(diagnosticos_df_export))
+
+# Destaque condicional: linhas com status == "warning" em amarelo claro
+linhas_warning <- which(diagnosticos_df_export$status == "warning") + 1  # +1 por causa do cabeçalho
+if (length(linhas_warning) > 0) {
+  addStyle(
+    wb, "Diagnósticos",
+    style = createStyle(fgFill = "#FCF3CF"),
+    rows = linhas_warning,
+    cols = 1:ncol(diagnosticos_df_export),
+    gridExpand = TRUE,
+    stack = TRUE
+  )
+}
+
+saveWorkbook(wb, file.path(caminho_salvamento, "diagnosticos_amostra.xlsx"), overwrite = TRUE)
+
+# =============================================================================
+# 5. AJUSTE DISTRIBUICOES
+# =============================================================================
+
+distribuicoes <- c("gev", "gpa", "pe3", "ln2", "ln3", "gum")
+metodos       <- c("lmom", "mom", "mle")
+
+fits_max <- lapply(vetores_max, function(x) {
+  alea_fit(
+    x,
+    distribution = distribuicoes,
+    method = metodos
+  )
+})
+
+fits_tabela <- do.call(rbind, lapply(names(fits_max), function(dur) {
+  df <- as.data.frame(fits_max[[dur]])
+  df$duracao <- dur
+  df
+}))
+
+fits_tabela[fits_tabela$status != "ok", c("duracao", "distribution", "method", "status")]
+
+wb <- createWorkbook()
+addWorksheet(wb, "Modelos Ajustados")
+
+writeData(wb, "Modelos Ajustados", fits_tabela, headerStyle = createStyle(
+  textDecoration = "bold",
+  fgFill = "#1B4F72",
+  fontColour = "white",
+  halign = "center",
+  border = "TopBottom"
+))
+
+setColWidths(wb, "Modelos Ajustados", cols = 1:ncol(fits_tabela), widths = "auto")
+
+freezePane(wb, "Modelos Ajustados", firstRow = TRUE, firstCol = TRUE)
+
+addFilter(wb, "Modelos Ajustados", rows = 1, cols = 1:ncol(fits_tabela))
+
+# Destaque condicional: modelos que falharam (status != "ok") em vermelho claro
+linhas_falha <- which(fits_tabela$status != "ok") + 1
+if (length(linhas_falha) > 0) {
+  addStyle(
+    wb, "Modelos Ajustados",
+    style = createStyle(fgFill = "#FADBD8"),
+    rows = linhas_falha,
+    cols = 1:ncol(fits_tabela),
+    gridExpand = TRUE,
+    stack = TRUE
+  )
+}
+
+saveWorkbook(wb, file.path(caminho_salvamento, "tabela_de_ajustes_de_distribuicoes.xlsx"), overwrite = TRUE)
+
+# =============================================================================
+# 6. GOODNESS OF FIT
+# =============================================================================
+
+# GOF para cada duração
+gof_max <- lapply(fits_max, function(fit) {
+  alea_gof(fit, statistics = "all")
+})
+names(gof_max) <- names(fits_max)
+
+gof_tabela <- do.call(rbind, lapply(names(gof_max), function(dur) {
+  df <- as.data.frame(gof_max[[dur]])
+  df$duracao <- dur
+  df
+}))
+
+gof_wide <- gof_tabela %>%
+  select(duracao, distribution, method, statistic, estimate) %>%
+  pivot_wider(names_from = statistic, values_from = estimate)
+
+# Ranking por duração: 1 = melhor ajuste relativo
+gof_ranking <- gof_wide %>%
+  group_by(duracao) %>%
+  mutate(
+    rank_ks     = rank(ks),
+    rank_cvm    = rank(cvm),
+    rank_ad     = rank(ad),
+    rank_aic    = rank(aic),
+    rank_bic    = rank(bic),
+    rank_loglik = rank(-loglik)  # maior loglik é melhor, então inverte
+  ) %>%
+  ungroup()
+
+# Rank médio como resumo geral por combinação
+gof_ranking <- gof_ranking %>%
+  rowwise() %>%
+  mutate(rank_medio = mean(c(rank_ks, rank_cvm, rank_ad, rank_aic, rank_bic, rank_loglik))) %>%
+  ungroup()
+
+# Os 3 piores colocados (rank médio mais alto) por duração
+gof_ranking %>%
+  group_by(duracao) %>%
+  slice_max(rank_medio, n = 3) %>%
+  select(duracao, distribution, method, rank_medio) %>%
+  arrange(duracao, desc(rank_medio))
+
+gof_ranking_ordenado <- gof_ranking %>%
+  arrange(duracao, rank_medio)
+
+gof_ranking_ordenado %>%
+  select(duracao, distribution, method, rank_medio, rank_ks, rank_cvm, rank_ad, rank_aic, rank_bic, rank_loglik)
+
+# Arredondando as colunas numéricas para facilitar a leitura
+gof_ranking_export <- gof_ranking_ordenado %>%
+  mutate(across(where(is.numeric), ~ round(.x, 4)))
+
+wb <- createWorkbook()
+addWorksheet(wb, "Ranking GOF")
+
+writeData(wb, "Ranking GOF", gof_ranking_export, headerStyle = createStyle(
+  textDecoration = "bold",
+  fgFill = "#1B4F72",
+  fontColour = "white",
+  halign = "center",
+  border = "TopBottom"
+))
+
+setColWidths(wb, "Ranking GOF", cols = 1:ncol(gof_ranking_export), widths = "auto")
+
+freezePane(wb, "Ranking GOF", firstRow = TRUE, firstCol = TRUE)
+
+addFilter(wb, "Ranking GOF", rows = 1, cols = 1:ncol(gof_ranking_export))
+
+# Destaque: o vencedor (rank_medio mínimo) de cada duração, em verde
+linhas_vencedoras <- gof_ranking_export %>%
+  mutate(linha_excel = row_number() + 1) %>%
+  group_by(duracao) %>%
+  slice_min(rank_medio, n = 1, with_ties = FALSE) %>%
+  pull(linha_excel)
+
+addStyle(
+  wb, "Ranking GOF",
+  style = createStyle(fgFill = "#D5F5E3"),
+  rows = linhas_vencedoras,
+  cols = 1:ncol(gof_ranking_export),
+  gridExpand = TRUE,
+  stack = TRUE
+)
+
+saveWorkbook(wb, file.path(caminho_salvamento, "goodnessoffit_ranking_ordenado.xlsx"), overwrite = TRUE)
+
+# =============================================================================
+# 6. PLOTAGEM (TODOS AS DISTRIBUICOES E METODOS DE ESTIMATIVA DE PARAMETROS)
+# =============================================================================
+
+# Paleta de cores fixas por distribuição
+cores_distribuicao <- c(
+  GEV = "#1B4F72",
+  GPA = "#D35400",
+  GUM = "#117A65",
+  LN2 = "#7D3C98",
+  LN3 = "#C0392B",
+  PE3 = "#F1C40F"
+)
+
+# Tipos de linha fixos por método
+linetypes_metodo <- c(
+  LMOM = "solid",
+  MLE  = "dashed",
+  MOM  = "dotted"
+)
+
+plot_quantis_selecionado <- function(fit_compare, return_period,
+                                     distribuicoes = NULL, metodos = NULL,
+                                     titulo = NULL, subtitulo = NULL,
+                                     tamanho_pontos = 2.5,
+                                     espessura_linha = 0.5) {
+  q <- alea_quantile(fit_compare, return_period = return_period)
+  p_base <- plot(q, plot_observed = TRUE)
+  
+  dados_plot <- p_base$data
+  dados_plot$distribution <- toupper(dados_plot$distribution)
+  dados_plot$method <- toupper(dados_plot$method)
+  
+  if (!is.null(distribuicoes)) dados_plot <- dados_plot[dados_plot$distribution %in% toupper(distribuicoes), ]
+  if (!is.null(metodos)) dados_plot <- dados_plot[dados_plot$method %in% toupper(metodos), ]
+  
+  if (nrow(dados_plot) == 0) {
+    stop("Nenhum modelo encontrado para a combinação de distribuição/método informada.")
+  }
+  
+  ticks <- unique(p_base$data[, c("return_period", "return_period_axis")])
+  ticks <- ticks[order(ticks$return_period), ]
+  
+  dados_observados <- if (length(p_base$layers) > 1) p_base$layers[[2]]$data else NULL
+  
+  p <- ggplot(
+    dados_plot,
+    aes(
+      x = return_period_axis, y = quantile,
+      color = distribution, linetype = method, group = model_label
+    )
+  ) +
+    geom_line(linewidth = espessura_linha)
+  
+  if (!is.null(dados_observados) && nrow(dados_observados) > 0) {
+    p <- p +
+      geom_point(
+        data = dados_observados,
+        aes(x = return_period_axis, y = quantile),
+        inherit.aes = FALSE,
+        shape = 21,
+        size = tamanho_pontos,
+        stroke = 0.8,
+        color = "#2C3E50",
+        fill = "white",
+        alpha = 0.9
+      )
+  }
+  
+  p +
+    scale_color_manual(values = cores_distribuicao, name = "Distribuição") +
+    scale_linetype_manual(values = linetypes_metodo, name = "Método") +
+    scale_x_continuous(breaks = ticks$return_period_axis, labels = ticks$return_period) +
+    labs(title = titulo, subtitle = subtitulo, x = "Tempo de retorno (anos)", y = "Quantil (mm)") +
+    theme_bw(base_size = 11) +
+    theme(panel.grid.minor = element_blank())
+}
+
+# Wrapper: roda a função acima para todas as durações
+plot_quantis_todas_duracoes <- function(fits_max, return_period,
+                                        distribuicoes = NULL, metodos = NULL,
+                                        espessura_linha = 0.5) {
+  estacao_id <- unique(dados_corrigido$station_code)
+  
+  plots <- lapply(names(fits_max), function(dur) {
+    plot_quantis_selecionado(
+      fits_max[[dur]],
+      return_period = return_period,
+      distribuicoes = distribuicoes,
+      metodos = metodos,
+      titulo = duracoes_label[[dur]],
+      subtitulo = NULL,
+      espessura_linha = espessura_linha
+    )
+  })
+  names(plots) <- names(fits_max)
+  plots
+}
+
+# =============================================================================
+# Gerando os gráficos, cada um com título = duração
+# =============================================================================
+
+estacao_id <- unique(dados_corrigido$station_code)
+
+plots_todos_titulo_curto <- plot_quantis_todas_duracoes(
+  fits_max, retornos,
+  espessura_linha = 0.5
+)
+
+plots_interativos <- lapply(plots_todos_titulo_curto, function(p) {
+  ggplotly(p, tooltip = c("x", "y", "colour", "linetype"), height = 500)
+})
+names(plots_interativos) <- names(plots_todos_titulo_curto)
+
+# Sem compartilhar_legenda() — cada gráfico mantém sua própria legenda independente
+
+# =============================================================================
+# Montando a página HTML, um gráfico abaixo do outro
+# =============================================================================
+
+pagina_html <- tagList(
+  h1(
+    paste0("Distribuições Teóricas vs. Quantis Empíricos | Estação ", estacao_id),
+    style = "text-align:center; font-family:sans-serif;"
+  ),
+  lapply(names(plots_interativos), function(dur) {
+    tagList(
+      h2(duracoes_label[[dur]], style = "text-align:center; font-family:sans-serif; margin-top:40px;"),
+      plots_interativos[[dur]],
+      hr(style = "margin:30px 0;")
+    )
+  })
+)
+
+save_html(
+  pagina_html,
+  file = file.path(caminho_salvamento, "dist_teoricas_quantis_todas_duracoes.html")
+)
+
+browseURL(file.path(caminho_salvamento, "dist_teoricas_quantis_todas_duracoes.html"))
+
+# =============================================================================
+# 7. PLOTAGEM (DISTRIBUICAO E METODO SELECIONADO)
+# =============================================================================
+
+plot_quantis_selecionado <- function(fit_compare, return_period,
+                                     distribuicoes = NULL, metodos = NULL,
+                                     titulo = NULL, subtitulo = NULL,
+                                     tamanho_pontos = 2.5) {
+  q <- alea_quantile(fit_compare, return_period = return_period)
+  p_base <- plot(q, plot_observed = TRUE)
+  
+  dados_plot <- p_base$data
+  dados_plot$distribution <- toupper(dados_plot$distribution)
+  dados_plot$method <- toupper(dados_plot$method)
+  
+  # aplica os filtros, se informados
+  if (!is.null(distribuicoes)) {
+    dados_plot <- dados_plot[dados_plot$distribution %in% toupper(distribuicoes), ]
+  }
+  if (!is.null(metodos)) {
+    dados_plot <- dados_plot[dados_plot$method %in% toupper(metodos), ]
+  }
+  
+  if (nrow(dados_plot) == 0) {
+    stop("Nenhum modelo encontrado para a combinação de distribuição/método informada.")
+  }
+  
+  ticks <- unique(p_base$data[, c("return_period", "return_period_axis")])
+  ticks <- ticks[order(ticks$return_period), ]
+  
+  dados_observados <- if (length(p_base$layers) > 1) p_base$layers[[2]]$data else NULL
+  
+  p <- ggplot(
+    dados_plot,
+    aes(
+      x = return_period_axis, y = quantile,
+      color = distribution, linetype = method, group = model_label
+    )
+  ) +
+    geom_line(linewidth = 1)
+  
+  if (!is.null(dados_observados) && nrow(dados_observados) > 0) {
+    p <- p +
+      geom_point(
+        data = dados_observados,
+        aes(x = return_period_axis, y = quantile),
+        inherit.aes = FALSE,
+        shape = 21,
+        size = tamanho_pontos,
+        stroke = 0.8,
+        color = "#2C3E50",
+        fill = "white",
+        alpha = 0.9
+      )
+  }
+  
+  p +
+    scale_color_manual(values = cores_distribuicao, name = "Distribuição") +
+    scale_linetype_manual(values = linetypes_metodo, name = "Método") +
+    scale_x_continuous(breaks = ticks$return_period_axis, labels = ticks$return_period) +
+    labs(
+      title = titulo,
+      subtitle = subtitulo,
+      x = "Tempo de retorno (anos)",
+      y = "Quantil (mm)"
+    ) +
+    theme_bw(base_size = 11) +
+    theme(panel.grid.minor = element_blank())
+}
+
+# Wrapper: roda a função acima para todas as durações
+plot_quantis_todas_duracoes <- function(fits_max, return_period,
+                                        distribuicoes = NULL, metodos = NULL) {
+  estacao_id <- unique(dados_corrigido$station_code)
+  
+  plots <- lapply(names(fits_max), function(dur) {
+    plot_quantis_selecionado(
+      fits_max[[dur]],
+      return_period = return_period,
+      distribuicoes = distribuicoes,
+      metodos = metodos,
+      titulo = paste0(
+        "Quantis — ", duracoes_label[[dur]],
+        if (!is.null(distribuicoes)) paste0(" | ", paste(toupper(distribuicoes), collapse = ", ")) else "",
+        if (!is.null(metodos)) paste0(" (", paste(toupper(metodos), collapse = ", "), ")") else ""
+      ),
+      subtitulo = paste0("Estação ", estacao_id)
+    )
+  })
+  names(plots) <- names(fits_max)
+  plots
+}
+
+# =============================================================================
+
+############ NESTE PONTO VOCÊ JÁ DEVE TER ESCOLHIDO A DISTRIBUIÇÃO TEÓRICA
+
+########### NO PRÓXIMO PONTO VAMOS COMPARAR OS MÉTODOS
+
+# =============================================================================
+
+plots_dist_teo_comparacao <- plot_quantis_todas_duracoes(
+  fits_max, retornos,
+  distribuicoes = distribuicao_escolhida,
+  metodos = c("lmom", "mle", "mom")
+)
+
+wrap_plots(plots_dist_teo_comparacao, ncol = 3) +
+  plot_annotation(
+    title = "Distribuições Teóricas vs. Quantis Empíricos",
+    subtitle = paste0("Estação ", unique(dados_corrigido$station_code))
+  )
+
+# =============================================================================
+# 9. - DISTRIBUICAO VENCEDORA
+# =============================================================================
+
+extrair_fit_manual <- function(fits_max, dur, distribuicao, metodo) {
+  # resolve valor único ou nomeado por duração
+  dist_dur <- if (length(distribuicao) > 1) distribuicao[[dur]] else distribuicao
+  met_dur  <- if (length(metodo) > 1) metodo[[dur]] else metodo
+  
+  fit_tabela <- as.data.frame(fits_max[[dur]])
+  idx <- which(fit_tabela$distribution == dist_dur & fit_tabela$method == met_dur)
+  
+  if (length(idx) == 0) {
+    stop("Combinação '", dist_dur, "' / '", met_dur, "' não encontrada em ", dur, ".")
+  }
+  
+  fits_max[[dur]]$fit_objects[[fit_tabela$fit_index[idx]]]
+}
+
+fits_selecionados <- lapply(names(fits_max), function(dur) {
+  extrair_fit_manual(fits_max, dur, distribuicao_escolhida, metodo_escolhido)
+})
+names(fits_selecionados) <- names(fits_max)
+
+ci_selecionados <- lapply(names(fits_selecionados), function(dur) {
+  confint(
+    fits_selecionados[[dur]],
+    parm = "quantile",
+    return_period = retornos,
+    level = 0.95,
+    method = "bootstrap",
+    n_boot = 500,
+    seed = 123
+  )
+})
+names(ci_selecionados) <- names(fits_selecionados)
+
+plots_ci <- lapply(names(ci_selecionados), function(dur) {
+  dist_dur <- if (length(distribuicao_escolhida) > 1) distribuicao_escolhida[[dur]] else distribuicao_escolhida
+  met_dur  <- if (length(metodo_escolhido) > 1) metodo_escolhido[[dur]] else metodo_escolhido
+  
+  plot(ci_selecionados[[dur]], plot_observed = TRUE) +
+    labs(
+      title = paste0("Quantis emp vs. dist. ajust. e IC 95% — ", duracoes_label[[dur]]),
+      subtitle = paste0(toupper(dist_dur), " / ", toupper(met_dur), " | Estação ", unique(dados_corrigido$station_code))
+    ) +
+    theme_bw(base_size = 11) +
+    theme(panel.grid.minor = element_blank())
+})
+names(plots_ci) <- names(ci_selecionados)
+
+wrap_plots(plots_ci, ncol = 3) +
+  plot_annotation(
+    title = "Quantis emp vs. dist. ajust. e IC 95%",
+    subtitle = paste0("Estação ", unique(dados_corrigido$station_code))
+  )
+
+p_ci_todas_duracoes <- wrap_plots(plots_ci, ncol = 3) +
+  plot_annotation(
+    title = "Quantis emp vs. dist. ajust. e IC 95%",
+    subtitle = paste0("Estação ", unique(dados_corrigido$station_code))
+  )
+
+p_ci_todas_duracoes
+
+ggsave(
+  filename = file.path(caminho_salvamento, "quantis_ci_todas_duracoes.png"),
+  plot = p_ci_todas_duracoes,
+  width = 14,
+  height = 10,
+  dpi = 300
+)
+
+# =============================================================================
+
+parametros_selecionados <- do.call(rbind, lapply(names(fits_selecionados), function(dur) {
+  fit <- fits_selecionados[[dur]]
+  params <- as.data.frame(as.list(coef(fit)))  # location, scale, shape (padronizados)
+  params$duracao      <- dur
+  params$distribution <- fit$distribution
+  params$method       <- fit$method
+  params
+}))
+
+parametros_selecionados <- parametros_selecionados[, c(
+  "duracao", "distribution", "method",
+  setdiff(names(parametros_selecionados), c("duracao", "distribution", "method"))
+)]
+
+parametros_selecionados
+
+wb <- createWorkbook()
+addWorksheet(wb, "Parâmetros Selecionados")
+
+writeData(wb, "Parâmetros Selecionados", parametros_selecionados, headerStyle = createStyle(
+  textDecoration = "bold",
+  fgFill = "#1B4F72",
+  fontColour = "white",
+  halign = "center",
+  border = "TopBottom"
+))
+
+setColWidths(wb, "Parâmetros Selecionados", cols = 1:ncol(parametros_selecionados), widths = "auto")
+
+freezePane(wb, "Parâmetros Selecionados", firstRow = TRUE, firstCol = TRUE)
+
+addFilter(wb, "Parâmetros Selecionados", rows = 1, cols = 1:ncol(parametros_selecionados))
+
+saveWorkbook(wb, file.path(caminho_salvamento, "parametros_selecionados.xlsx"), overwrite = TRUE)
+
+gof_selecionados <- do.call(rbind, lapply(names(fits_selecionados), function(dur) {
+  gof <- as.data.frame(alea_gof(fits_selecionados[[dur]], statistics = "all"))
+  gof$duracao <- dur
+  gof
+}))
+
+gof_selecionados <- gof_selecionados[, c("duracao", "distribution", "method", "statistic", "estimate")]
+
+gof_selecionados_wide <- gof_selecionados %>%
+  pivot_wider(names_from = statistic, values_from = estimate)
+
+gof_selecionados_wide_export <- gof_selecionados_wide %>%
+  mutate(across(where(is.numeric), ~ round(.x, 4)))
+
+wb <- createWorkbook()
+addWorksheet(wb, "GOF Selecionados")
+
+writeData(wb, "GOF Selecionados", gof_selecionados_wide_export, headerStyle = createStyle(
+  textDecoration = "bold",
+  fgFill = "#1B4F72",
+  fontColour = "white",
+  halign = "center",
+  border = "TopBottom"
+))
+
+setColWidths(wb, "GOF Selecionados", cols = 1:ncol(gof_selecionados_wide_export), widths = "auto")
+
+freezePane(wb, "GOF Selecionados", firstRow = TRUE, firstCol = TRUE)
+
+addFilter(wb, "GOF Selecionados", rows = 1, cols = 1:ncol(gof_selecionados_wide_export))
+
+saveWorkbook(wb, file.path(caminho_salvamento, "gof_selecionados.xlsx"), overwrite = TRUE)
+
+ks_bootstrap_test <- function(fit, n_boot = 500, seed = NULL) {
+  if (!is.null(seed)) set.seed(seed)
+  
+  n <- length(fit$data)
+  distribution <- fit$distribution
+  method <- fit$method
+  
+  d_obs <- as.data.frame(alea_gof(fit, statistics = "ks"))$estimate
+  
+  d_boot <- numeric(n_boot)
+  
+  for (b in seq_len(n_boot)) {
+    # amostra sintética a partir da própria distribuição ajustada (inversão da CDF)
+    u  <- runif(n, min = 1e-6, max = 1 - 1e-6)
+    tr <- 1 / (1 - u)
+    x_sim <- alea_quantile(fit, return_period = tr)$quantile
+    
+    # reajusta o modelo à amostra sintética (essencial p/ validade do teste)
+    fit_sim <- tryCatch(
+      alea_fit(x_sim, distribution = distribution, method = method),
+      error = function(e) NULL
+    )
+    
+    d_boot[b] <- if (is.null(fit_sim)) {
+      NA_real_
+    } else {
+      as.data.frame(alea_gof(fit_sim, statistics = "ks"))$estimate
+    }
+  }
+  
+  d_boot <- d_boot[is.finite(d_boot)]
+  
+  list(
+    d_obs = d_obs,
+    p_value = mean(d_boot >= d_obs),
+    n_boot_sucesso = length(d_boot)
+  )
+}
+
+set.seed(123)
+
+ks_testes <- lapply(names(fits_selecionados), function(dur) {
+  ks_bootstrap_test(fits_selecionados[[dur]], n_boot = 500)
+})
+names(ks_testes) <- names(fits_selecionados)
+
+ks_tabela <- do.call(rbind, lapply(names(ks_testes), function(dur) {
+  data.frame(
+    duracao      = dur,
+    distribution = fits_selecionados[[dur]]$distribution,
+    method       = fits_selecionados[[dur]]$method,
+    ks_estatistica = ks_testes[[dur]]$d_obs,
+    p_value        = ks_testes[[dur]]$p_value,
+    n_boot_sucesso = ks_testes[[dur]]$n_boot_sucesso
+  )
+}))
+
+alpha_ks <- 0.05
+
+reprovados <- ks_tabela[ks_tabela$p_value < alpha_ks, ]
+
+if (nrow(reprovados) > 0) {
+  message(
+    "⚠ Atenção: ", nrow(reprovados), " duração(ões) rejeitaram H0 no teste Kolmogorov-Smirnov(p < ", alpha_ks, "):\n",
+    paste0(
+      "  - ", reprovados$duracao, " (", toupper(reprovados$distribution), "/", toupper(reprovados$method),
+      "): p = ", round(reprovados$p_value, 4),
+      collapse = "\n"
+    )
+  )
+} else {
+  message("✓ Todas as durações passaram no teste de Kolmogorov-Smirnov (p >= ", alpha_ks, "). Nenhuma rejeição de H0.")
+}
+
+ks_tabela$status_ks <- ifelse(ks_tabela$p_value < alpha_ks, "reprovado", "aprovado")
+ks_tabela
+
+ks_tabela_export <- ks_tabela %>%
+  mutate(across(where(is.numeric), ~ round(.x, 4)))
+
+wb <- createWorkbook()
+addWorksheet(wb, "Teste KS Bootstrap")
+
+writeData(wb, "Teste KS Bootstrap", ks_tabela_export, headerStyle = createStyle(
+  textDecoration = "bold",
+  fgFill = "#1B4F72",
+  fontColour = "white",
+  halign = "center",
+  border = "TopBottom"
+))
+
+setColWidths(wb, "Teste KS Bootstrap", cols = 1:ncol(ks_tabela_export), widths = "auto")
+
+freezePane(wb, "Teste KS Bootstrap", firstRow = TRUE, firstCol = TRUE)
+
+addFilter(wb, "Teste KS Bootstrap", rows = 1, cols = 1:ncol(ks_tabela_export))
+
+# Destaque: durações que rejeitaram H0 (p_value < 0.05), em vermelho claro
+linhas_reprovadas <- which(ks_tabela_export$p_value < 0.05) + 1
+if (length(linhas_reprovadas) > 0) {
+  addStyle(
+    wb, "Teste KS Bootstrap",
+    style = createStyle(fgFill = "#FADBD8"),
+    rows = linhas_reprovadas,
+    cols = 1:ncol(ks_tabela_export),
+    gridExpand = TRUE,
+    stack = TRUE
+  )
+}
+
+saveWorkbook(wb, file.path(caminho_salvamento, "ks_tabela_bootstrap.xlsx"), overwrite = TRUE)
+
+# Quantis do modelo selecionado, para cada duração
+pdf_longa <- do.call(rbind, lapply(names(fits_selecionados), function(dur) {
+  q <- as.data.frame(alea_quantile(fits_selecionados[[dur]], return_period = retornos))
+  q$duracao <- dur
+  q
+}))
+
+# Formato largo: duração x tempo de retorno
+tabela_pdf <- pdf_longa %>%
+  select(duracao, return_period, quantile) %>%
+  pivot_wider(
+    names_from = return_period,
+    values_from = quantile,
+    names_prefix = "TR_"
+  )
+
+# Ordenando as durações na ordem hidrológica natural (1, 2, 3, 5, 7, 10, 15, 20, 30 dias)
+ordem_duracoes <- names(duracoes_label)
+tabela_pdf <- tabela_pdf[match(ordem_duracoes, tabela_pdf$duracao), ]
+
+# Arredondando pra facilitar leitura
+tabela_pdf[, -1] <- round(tabela_pdf[, -1], 1)
+tabela_pdf <- tabela_pdf[, -2]
+tabela_pdf$duracao <- duracoes_label[tabela_pdf$duracao]
+
+tabela_pdf
+
+wb <- createWorkbook()
+addWorksheet(wb, "Tabela PDF")
+
+writeData(wb, "Tabela PDF", tabela_pdf, headerStyle = createStyle(
+  textDecoration = "bold",
+  fgFill = "#1B4F72",
+  fontColour = "white",
+  halign = "center",
+  border = "TopBottom"
+))
+
+setColWidths(wb, "Tabela PDF", cols = 1:ncol(tabela_pdf), widths = "auto")
+
+freezePane(wb, "Tabela PDF", firstRow = TRUE, firstCol = TRUE)
+
+addFilter(wb, "Tabela PDF", rows = 1, cols = 1:ncol(tabela_pdf))
+
+saveWorkbook(wb, file.path(caminho_salvamento, "quantis_maximos_por_duracao_e_TR.xlsx"), overwrite = TRUE)
+
+colunas_tr <- grep("^TR_", names(tabela_pdf), value = TRUE)
+ordem_tr   <- colunas_tr[order(as.numeric(sub("TR_", "", colunas_tr)))]
+
+# --- 1) Dentro de cada duração: quantil deve crescer com o TR ---
+inconsistencias_tr <- do.call(rbind, lapply(seq_len(nrow(tabela_pdf)), function(i) {
+  valores <- as.numeric(tabela_pdf[i, ordem_tr])
+  diffs   <- diff(valores)
+  
+  if (any(diffs < 0)) {
+    idx <- which(diffs < 0)
+    data.frame(
+      duracao    = tabela_pdf$duracao[i],
+      de         = ordem_tr[idx],
+      para       = ordem_tr[idx + 1],
+      valor_de   = valores[idx],
+      valor_para = valores[idx + 1]
+    )
+  }
+}))
+
+# --- 2) Dentro de cada TR: quantil deve crescer com a duração ---
+inconsistencias_duracao <- do.call(rbind, lapply(colunas_tr, function(col) {
+  valores <- tabela_pdf[[col]]
+  diffs   <- diff(valores)
+  
+  if (any(diffs < 0)) {
+    idx <- which(diffs < 0)
+    data.frame(
+      tr         = col,
+      de         = tabela_pdf$duracao[idx],
+      para       = tabela_pdf$duracao[idx + 1],
+      valor_de   = valores[idx],
+      valor_para = valores[idx + 1]
+    )
+  }
+}))
+
+# --- Mensagens de resumo ---
+if (!is.null(inconsistencias_tr)) {
+  message(
+    "⚠ Inconsistência(s) entre tempos de retorno (deveria crescer, mas caiu):\n",
+    paste0("  - ", inconsistencias_tr$duracao, ": ", inconsistencias_tr$de,
+           " (", inconsistencias_tr$valor_de, ") > ", inconsistencias_tr$para,
+           " (", inconsistencias_tr$valor_para, ")", collapse = "\n")
+  )
+} else {
+  message("✓ Todos os TR crescem corretamente dentro de cada duração.")
+}
+
+if (!is.null(inconsistencias_duracao)) {
+  message(
+    "⚠ Inconsistência(s) entre durações (deveria crescer, mas caiu):\n",
+    paste0("  - TR ", inconsistencias_duracao$tr, ": ", inconsistencias_duracao$de,
+           " (", inconsistencias_duracao$valor_de, ") > ", inconsistencias_duracao$para,
+           " (", inconsistencias_duracao$valor_para, ")", collapse = "\n")
+  )
+} else {
+  message("✓ Todas as durações crescem corretamente dentro de cada TR.")
+}
+
+# Duração em dias, na mesma ordem/códigos que já usamos
+pdf_longa$duracao_dias <- duracoes_dias[pdf_longa$duracao]
+
+# Removendo TR = 2, para ficar consistente com a tabela final
+pdf_plot_dados <- pdf_longa[pdf_longa$return_period != 2, ]
+
+# Intensidade = precipitação / duração em horas
+pdf_plot_dados$duracao_horas <- pdf_plot_dados$duracao_dias * 24
+pdf_plot_dados$intensidade   <- pdf_plot_dados$quantile / pdf_plot_dados$duracao_horas
+pdf_plot_dados <- pdf_plot_dados[pdf_plot_dados$return_period != 1.01, ]
+
+p_idf <- ggplot(
+  pdf_plot_dados,
+  aes(
+    x = duracao_horas, y = intensidade,
+    color = factor(return_period), group = return_period
+  )
+) +
+  geom_smooth(method = "loess", se = FALSE, linewidth = 1, span = 0.5) +
+  scale_x_log10(breaks = round(unique(pdf_plot_dados$duracao_horas))) +
+  scale_color_viridis_d(name = "TR (anos)") +
+  labs(
+    title = "Curvas Intensidade-Duração-Frequência (IDF)",
+    subtitle = paste0(
+      "Estação ", unique(dados_corrigido$station_code),
+      " | ", toupper(distribuicao_escolhida), " / ", toupper(metodo_escolhido)
+    ),
+    x = "Duração (horas, escala log)",
+    y = "Intensidade (mm/h)"
+  ) +
+  theme_bw(base_size = 11) +
+  theme(panel.grid.minor = element_blank())
+
+p_idf
+
+ggsave(
+  filename = file.path(caminho_salvamento, "curva_idf.png"),
+  plot = p_idf,
+  width = 10,
+  height = 6,
+  dpi = 300
+)
+
+# =============================================================================
+#FIM
+# =============================================================================
