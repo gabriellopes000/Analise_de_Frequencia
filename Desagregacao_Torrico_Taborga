@@ -1,0 +1,261 @@
+# ==========================================================================
+# Metodologia de Desagregação de Chuvas - Torrico (1974) - "Práticas Hidrológicas"
+# ==========================================================================
+
+# PARA RODAR O CÓDIGO, BASTA PRESSIONAR CTRL+A SEGUIDO DE CTRL+ENTER
+
+# NÃO SÃO NECESSÁRIAS EDIÇÕES
+
+# ==========================================================================
+# ==========================================================================
+# ==========================================================================
+# ==========================================================================
+# ==========================================================================
+
+
+# ---- Checagem e instalação automática de pacotes ----
+# ---- Pacotes ----
+pacotes_necessarios <- c("shiny", "rhandsontable")
+for (pkg in pacotes_necessarios) {
+  if (!requireNamespace(pkg, quietly = TRUE)) install.packages(pkg, dependencies = TRUE)
+  library(pkg, character.only = TRUE)
+}
+options(shiny.launch.browser = TRUE)
+
+isozona <- "D"
+TR      <- c(2, 5, 10, 20, 25, 50, 100, 200, 500, 1000, 10000) # Vetor de tempos de retorno
+P24h    <- c(97.9, 124.5, 142.1, 159.0, 164.3, 180.8, 197.2, 213.5, 235.1, 251.3, 305.4) # Vetor de precipitações de 24h
+
+
+# ---- Tabela 1 de Torrico (1974) - todas as isozonas ----
+tabela_1h24h <- data.frame(
+  isozona = rep(c("A","B","C","D","E","F","G","H"), each = 10),
+  TR      = rep(c(5, 10, 15, 20, 25, 30, 50, 100, 1000, 10000), times = 8),
+  r1h24h  = c(
+    36.2, 35.8, 35.6, 35.5, 35.4, 35.3, 35.0, 34.7, 33.6, 32.5,
+    38.1, 37.8, 37.5, 37.4, 37.3, 37.2, 36.9, 36.4, 37.2, 36.0,
+    40.1, 39.7, 39.5, 39.3, 39.2, 39.1, 38.8, 38.4, 37.2, 36.0,
+    42.0, 41.6, 41.4, 41.2, 41.1, 41.0, 40.7, 40.3, 39.0, 37.8,
+    44.0, 43.6, 43.3, 43.2, 43.0, 42.9, 42.6, 42.2, 40.9, 39.6,
+    46.0, 45.5, 45.3, 45.1, 44.9, 44.8, 44.5, 44.1, 42.7, 41.3,
+    47.9, 47.4, 47.2, 47.0, 46.8, 46.7, 46.4, 45.9, 44.5, 43.1,
+    49.9, 49.4, 49.1, 48.9, 48.8, 48.6, 48.3, 47.8, 46.3, 44.8
+  )
+)
+
+tabela_6min24h <- data.frame(
+  isozona  = rep(c("A","B","C","D","E","F","G","H"), each = 2),
+  TR       = rep(c(50, 100), times = 8),  # 50 = valor da faixa "5-50"
+  r6min24h = c(
+    7.0, 6.3,   8.4, 7.5,   9.8, 8.8,  11.2, 10.0,
+    12.6, 11.2, 13.9, 12.4, 15.4, 13.7, 16.7, 14.9
+  )
+)
+
+# ---- Percentual 1h/24h: tabela exata (TR na tabela) + regressao linear (TR fora) ----
+get_r1h24h <- function(isozona_sel, TR_alvo) {
+  tab <- subset(tabela_1h24h, isozona == isozona_sel)
+  fit <- lm(r1h24h ~ log(TR), data = tab)
+  a <- coef(fit)[2]; b <- coef(fit)[1]
+  
+  sapply(TR_alvo, function(tr) {
+    if (tr < 5) {
+      warning(sprintf("TR = %s anos esta abaixo de 5 anos: os coeficientes de desagregacao 1h/24h de Torrico (1974) sao definidos a partir de TR = 5 anos. O valor esta sendo extrapolado pela reta de ajuste (ln(TR)).", tr), call. = FALSE)
+    }
+    if (tr > 10000) {
+      warning(sprintf("TR = %s anos esta acima de 10.000 anos: fora da faixa validada por Torrico (1974). O valor esta sendo extrapolado pela reta de ajuste (ln(TR)).", tr), call. = FALSE)
+    }
+    if (tr %in% tab$TR) tab$r1h24h[tab$TR == tr] else a * log(tr) + b
+  })
+}
+
+# ---- Percentual 6min/24h: funcao degrau (TR<=50 -> "5-50"; TR>=100 -> "100", sem extrapolar) ----
+get_r6min24h <- function(isozona_sel, TR_alvo) {
+  tab <- subset(tabela_6min24h, isozona == isozona_sel)
+  
+  sapply(TR_alvo, function(tr) {
+    if (tr > 100) {
+      warning(sprintf("TR = %s anos esta acima de 100 anos: os coeficientes de desagregacao 6min/24h de Torrico (1974) sao limitados a TR = 100 anos. O valor de TR = 100 esta sendo mantido (sem extrapolacao adicional).", tr), call. = FALSE)
+    }
+    if (tr <= 50) tab$r6min24h[tab$TR == 50] else tab$r6min24h[tab$TR == 100]
+  })
+}
+
+# ---- Interpolacao semi-log (altura linear em ln(duracao_horas)) entre 2 pontos ----
+semilog_2pts <- function(dur_h_1, altura_1, dur_h_2, altura_2, dur_h_alvo) {
+  x1 <- log(dur_h_1); x2 <- log(dur_h_2)
+  slope <- (altura_2 - altura_1) / (x2 - x1)
+  intercept <- altura_1 - slope * x1
+  slope * log(dur_h_alvo) + intercept
+}
+
+# ---- Funcao principal ----
+torrico_desagregacao <- function(
+    isozona, TR, P24h,
+    duracoes_min = c(6, 10, 15, 20, 30, 60, 120, 180, 240, 360, 480, 600, 720, 1080, 1440)
+) {
+  stopifnot(length(TR) == length(P24h))
+  
+  r1h   <- get_r1h24h(isozona, TR)
+  r6min <- get_r6min24h(isozona, TR)
+  
+  resultado <- do.call(rbind, lapply(seq_along(TR), function(i) {
+    P24h_i  <- P24h[i]
+    P1h_i   <- P24h_i * r1h[i]   / 100
+    P6min_i <- P24h_i * r6min[i] / 100
+    dur_h   <- duracoes_min / 60
+    
+    altura_calc <- sapply(dur_h, function(d) {
+      if (d <= 1) semilog_2pts(0.1, P6min_i, 1, P1h_i, d)
+      else        semilog_2pts(1, P1h_i, 24, P24h_i, d)
+    })
+    
+    data.frame(
+      isozona = isozona, TR = TR[i], duracao_min = duracoes_min,
+      altura_mm = altura_calc, intensidade_mm_h = altura_calc / dur_h
+    )
+  }))
+  
+  resultado
+}
+
+# ---- Formatar como data.frame largo (Duracao x TR) ----
+rotulos_duracao <- c(
+  "6" = "6 min",
+  "10" = "10 min", "15" = "15 min", "20" = "20 min", "30" = "30 min",
+  "60" = "1 h", "120" = "2 h", "180" = "3 h", "240" = "4 h",
+  "360" = "6 h", "480" = "8 h", "600" = "10 h", "720" = "12 h",
+  "1080" = "18 h", "1440" = "24 h"
+)
+
+formatar_df_largo <- function(resultado) {
+  largo <- reshape(
+    resultado[, c("TR", "duracao_min", "altura_mm")],
+    idvar = "duracao_min",
+    timevar = "TR",
+    direction = "wide"
+  )
+  names(largo) <- gsub("altura_mm\\.", "", names(largo))
+  largo <- largo[order(largo$duracao_min), ]
+  largo$Duracao <- rotulos_duracao[as.character(largo$duracao_min)]
+  largo$duracao_min <- NULL
+  largo <- largo[, c("Duracao", setdiff(names(largo), "Duracao"))]
+  rownames(largo) <- NULL
+  round_cols <- setdiff(names(largo), "Duracao")
+  largo[round_cols] <- round(largo[round_cols], 1)
+  largo
+}
+
+# ---- Plotar as curvas IDF ----
+plotar_idf <- function(resultado, titulo = NULL,
+                       cex_titulo = 1.2, cex_eixos = 1, cex_legenda = 1.0,
+                       altura_legenda = 1.3, ncol_legenda = 6) {
+  
+  if (is.null(titulo)) {
+    titulo <- sprintf("Curvas IDF - Metodo de Torrico (1974) - Isozona %s", unique(resultado$isozona))
+  }
+  
+  TRs <- sort(unique(resultado$TR))
+  cores <- hcl.colors(length(TRs), "Viridis")
+  faixa_x <- range(resultado$duracao_min)
+  faixa_y <- range(resultado$intensidade_mm_h)
+  
+  old_par <- par(no.readonly = TRUE)
+  on.exit(par(old_par))
+  
+  layout(matrix(1:2, nrow = 2), heights = c(5, altura_legenda))
+  
+  par(mar = c(4, 4, 3, 2) + 0.1)
+  plot(
+    NA, NA,
+    xlim = faixa_x, ylim = faixa_y,
+    log = "xy",
+    xlab = "Duracao (min)", ylab = "Intensidade (mm/h)",
+    main = titulo,
+    cex.main = cex_titulo, cex.lab = cex_eixos, cex.axis = cex_eixos
+  )
+  grid(equilogs = FALSE, col = "grey")
+  
+  for (i in seq_along(TRs)) {
+    dados_tr <- resultado[resultado$TR == TRs[i], ]
+    dados_tr <- dados_tr[order(dados_tr$duracao_min), ]
+    suave <- spline(log(dados_tr$duracao_min), log(dados_tr$intensidade_mm_h), n = 200)
+    lines(exp(suave$x), exp(suave$y), col = cores[i], lwd = 2.2)
+  }
+  
+  par(mar = c(4, 0, 0, 0))
+  plot.new()
+  legend(
+    "center",
+    legend = paste0(TRs, ""),
+    col = cores, lwd = 3, cex = cex_legenda,
+    bty = "n", horiz = FALSE, ncol = ncol_legenda,
+    title = "Tempo de Retorno (anos)"
+  )
+}
+
+
+# ---- EXECUÇÃO ----
+resultado <- torrico_desagregacao(isozona = isozona, TR = TR, P24h = P24h)
+
+df_final <- formatar_df_largo(resultado)
+print(df_final, row.names = FALSE)
+
+#plotar_idf(resultado, cex_legenda = 0.9, ncol_legenda = 3)
+
+rhandsontable(df_final, rowHeaders = FALSE) %>%
+  hot_cols(colWidths = 80) %>%
+  hot_table(highlightCol = TRUE, highlightRow = TRUE)
+
+
+ui <- fluidPage(
+  titlePanel("Desagregacao de Chuvas - Metodo de Torrico (1974)"),
+  sidebarLayout(
+    sidebarPanel(
+      selectInput("isozona", "Isozona:", choices = c("A","B","C","D","E","F","G","H"), selected = "D"),
+      helpText("Cole aqui o vetor de TR e P24h (Ctrl+V numa celula selecionada)."),
+      rHandsontableOutput("tabela_input"),
+      br(),
+      actionButton("calcular", "Calcular", class = "btn-primary")
+    ),
+    mainPanel(
+      h4("Tabela desagregada (mm)"),
+      rHandsontableOutput("tabela_saida"),
+      br(),
+      plotOutput("grafico_idf", height = "600px")
+    )
+  )
+)
+
+server <- function(input, output, session) {
+  
+  dados_iniciais <- data.frame(
+    TR   = c(2, 5, 10, 20, 25, 50, 100, 200, 500, 1000, 10000),
+    P24h = c(97.9, 124.5, 142.1, 159.0, 164.3, 180.8, 197.2, 213.5, 235.1, 251.3, 305.4)
+  )
+  
+  output$tabela_input <- renderRHandsontable({
+    rhandsontable(dados_iniciais, rowHeaders = FALSE) %>%
+      hot_cols(colWidths = 100)
+  })
+  
+  resultado_reativo <- eventReactive(input$calcular, {
+    tabela <- hot_to_r(input$tabela_input)
+    torrico_desagregacao(isozona = input$isozona, TR = tabela$TR, P24h = tabela$P24h)
+  })
+  
+  output$tabela_saida <- renderRHandsontable({
+    req(resultado_reativo())
+    df <- formatar_df_largo(resultado_reativo())
+    rhandsontable(df, rowHeaders = FALSE) %>%
+      hot_cols(colWidths = 80) %>%
+      hot_table(highlightCol = TRUE, highlightRow = TRUE)
+  })
+  
+  output$grafico_idf <- renderPlot({
+    req(resultado_reativo())
+    plotar_idf(resultado_reativo())
+  })
+}
+
+shinyApp(ui, server)
