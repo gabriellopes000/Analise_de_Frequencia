@@ -4,7 +4,7 @@
 
 # PARA RODAR O CÓDIGO, BASTA PRESSIONAR CTRL+A SEGUIDO DE CTRL+ENTER
 
-# NÃO SÃO NECESSÁRIAS EDIÇÕES
+# NÃO É NECESSÁRIO ALTERAR NADA NO CÓDIGO, AS ALTERAÇÕES SERÃO FEITAS NO SEU NAVEGADOR
 
 # ==========================================================================
 # ==========================================================================
@@ -203,9 +203,9 @@ print(df_final, row.names = FALSE)
 
 #plotar_idf(resultado, cex_legenda = 0.9, ncol_legenda = 3)
 
-rhandsontable(df_final, rowHeaders = FALSE) %>%
-  hot_cols(colWidths = 80) %>%
-  hot_table(highlightCol = TRUE, highlightRow = TRUE)
+#rhandsontable(df_final, rowHeaders = FALSE) %>%
+#  hot_cols(colWidths = 80) %>%
+#  hot_table(highlightCol = TRUE, highlightRow = TRUE)
 
 
 ui <- fluidPage(
