@@ -12,6 +12,7 @@
 # ==========================================================================
 # ==========================================================================
 
+rm(list = ls())
 
 # ---- Checagem e instalação automática de pacotes ----
 # ---- Pacotes ----
@@ -228,6 +229,11 @@ ui <- fluidPage(
 )
 
 server <- function(input, output, session) {
+  
+  # Encerra a sessão do R quando o navegador/aba for fechado
+  session$onSessionEnded(function() {
+    stopApp()
+  })
   
   dados_iniciais <- data.frame(
     TR   = c(2, 5, 10, 20, 25, 50, 100, 200, 500, 1000, 10000),
